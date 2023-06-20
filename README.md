@@ -1,5 +1,7 @@
 # Monocrat
 
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/hKdYBw?referralCode=ePg2dP)
+
 Monocrat is a GitHub App for [custom protection
 rules](https://docs.github.com/en/actions/deployment/protecting-deployments/creating-custom-deployment-protection-rules).
 
