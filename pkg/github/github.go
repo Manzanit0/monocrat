@@ -247,6 +247,8 @@ type DeploymentProtectionRuleEvent struct {
 type Client interface {
 	ApproveDeployment(ctx context.Context, event *DeploymentProtectionRuleEvent) error
 	RejectDeployment(ctx context.Context, event *DeploymentProtectionRuleEvent) error
+	CreateCheckRun(ctx context.Context, event github.CheckSuiteEvent) error
+	FailCheckRun(ctx context.Context, event github.CheckRunEvent) error
 }
 
 type client struct {
@@ -254,6 +256,8 @@ type client struct {
 	owner      string
 	repository string
 }
+
+var _ Client = (*client)(nil)
 
 type ErrorResponse struct {
 	Message          string `json:"message"`
@@ -279,6 +283,53 @@ func (c *client) ApproveDeployment(ctx context.Context, event *DeploymentProtect
 
 func (c *client) RejectDeployment(ctx context.Context, event *DeploymentProtectionRuleEvent) error {
 	return c.reviewDeployment(ctx, event, RejectedDeploymentState)
+}
+
+func (c *client) CreateCheckRun(ctx context.Context, event github.CheckSuiteEvent) error {
+	_, res, err := c.g.Checks.CreateCheckRun(ctx, event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), github.CreateCheckRunOptions{
+		Name:    "Checking commit message",
+		HeadSHA: event.GetCheckSuite().GetHeadSHA(),
+	})
+	if err != nil {
+		var errResp github.ErrorResponse
+		dec := json.NewDecoder(res.Body)
+		if err := dec.Decode(&errResp); err != nil && err != io.EOF {
+			log.Println("[error] unmarshal body:", err.Error())
+			return fmt.Errorf("fail check run: request failed + failed to parse body")
+		}
+
+		return fmt.Errorf("create check run: %s: %s", errResp.Message, errResp.Errors)
+	}
+
+	b, _ := io.ReadAll(res.Body)
+	log.Println(string(b))
+
+	return nil
+}
+
+func (c *client) FailCheckRun(ctx context.Context, event github.CheckRunEvent) error {
+	// Note: this allows adding actions! Deploy to production????
+	_, res, err := c.g.Checks.UpdateCheckRun(ctx, event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), event.CheckRun.GetID(), github.UpdateCheckRunOptions{
+		Status:     s("completed"),
+		Conclusion: s("failure"),
+		Output:     &github.CheckRunOutput{Title: s("Invalid changeset"), Summary: s("baribaribari"), Text: s("my textydexty")},
+	})
+	if err != nil {
+		var errResp github.ErrorResponse
+		dec := json.NewDecoder(res.Body)
+		if err := dec.Decode(&errResp); err != nil && err != io.EOF {
+			log.Println("[error] unmarshal body:", err.Error())
+			return fmt.Errorf("fail check run: request failed + failed to parse body")
+		}
+
+		return fmt.Errorf("fail check run: %s: %s", errResp.Message, errResp.Errors)
+	}
+
+	return nil
+}
+
+func s(ss string) *string {
+	return &ss
 }
 
 func (c *client) reviewDeployment(ctx context.Context, event *DeploymentProtectionRuleEvent, state string) error {
