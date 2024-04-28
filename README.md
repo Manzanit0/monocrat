@@ -25,3 +25,11 @@ gh deploy --env production --run-id 4881224728 --repo "Manzanit0/gitops-env-per-
 - https://docs.github.com/en/webhooks-and-events/webhooks/webhook-events-and-payloads#deployment_protection_rule
 - https://docs.github.com/en/rest/actions/workflow-runs#review-custom-deployment-protection-rules-for-a-workflow-run
 - https://github.com/google/go-github/issues/2774
+
+## Hacking
+
+To build the image of a service:
+
+```sh
+docker build -t monocrat:latest --build-arg SERVICE_PATH=./cmd/deployment-protection-rule .
+```

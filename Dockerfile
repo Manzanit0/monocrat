@@ -1,5 +1,7 @@
 FROM golang:1.20-alpine3.16 as build
 
+ARG SERVICE_PATH
+
 RUN apk add git
 
 WORKDIR /workspace
@@ -8,7 +10,7 @@ COPY . ./
 
 RUN go mod vendor
 
-RUN go build -o app .
+RUN go build -o app ${SERVICE_PATH}
 
 FROM alpine:3.16
 
