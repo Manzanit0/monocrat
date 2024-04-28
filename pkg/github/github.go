@@ -249,6 +249,7 @@ type Client interface {
 	RejectDeployment(ctx context.Context, event *DeploymentProtectionRuleEvent) error
 	CreateCheckRun(ctx context.Context, event github.CheckSuiteEvent) error
 	FailCheckRun(ctx context.Context, event github.CheckRunEvent) error
+	PassCheckRunWithDeploymentAction(ctx context.Context, event github.CheckRunEvent) error
 }
 
 type client struct {
@@ -313,6 +314,34 @@ func (c *client) FailCheckRun(ctx context.Context, event github.CheckRunEvent) e
 		Status:     s("completed"),
 		Conclusion: s("failure"),
 		Output:     &github.CheckRunOutput{Title: s("Invalid changeset"), Summary: s("baribaribari"), Text: s("my textydexty")},
+	})
+	if err != nil {
+		var errResp github.ErrorResponse
+		dec := json.NewDecoder(res.Body)
+		if err := dec.Decode(&errResp); err != nil && err != io.EOF {
+			log.Println("[error] unmarshal body:", err.Error())
+			return fmt.Errorf("fail check run: request failed + failed to parse body")
+		}
+
+		return fmt.Errorf("fail check run: %s: %s", errResp.Message, errResp.Errors)
+	}
+
+	return nil
+}
+
+func (c *client) PassCheckRunWithDeploymentAction(ctx context.Context, event github.CheckRunEvent) error {
+	// Note: this allows adding actions! Deploy to production????
+	_, res, err := c.g.Checks.UpdateCheckRun(ctx, event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), event.CheckRun.GetID(), github.UpdateCheckRunOptions{
+		Status:     s("completed"),
+		Conclusion: s("success"),
+		Output:     &github.CheckRunOutput{Title: s("Success"), Summary: s("baribaribari"), Text: s("my textydexty")},
+		Actions: []*github.CheckRunAction{
+			{
+				Label:       "Deploy to production",
+				Description: "Deployes the application to production",
+				Identifier:  "badibum",
+			},
+		},
 	})
 	if err != nil {
 		var errResp github.ErrorResponse

@@ -76,6 +76,11 @@ func main() {
 				break
 			}
 
+			if event.GetAction() == "requested_action" {
+				log.Println("Deploying ", event.GetRequestedAction().Identifier)
+				break
+			}
+
 			gh, err := githubwrap.NewClient(event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), appID, event.GetInstallation().GetID(), privateKey)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -83,7 +88,7 @@ func main() {
 				return
 			}
 
-			err = gh.FailCheckRun(r.Context(), event)
+			err = gh.PassCheckRunWithDeploymentAction(r.Context(), event)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				log.Println("[error] failing check run:", err)
