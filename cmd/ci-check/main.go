@@ -23,6 +23,7 @@ import (
 
 	"github.com/manzanit0/monocrat/pkg/httpx"
 	"github.com/manzanit0/monocrat/pkg/image"
+	"github.com/manzanit0/monocrat/pkg/lint"
 )
 
 func main() {
@@ -89,8 +90,8 @@ func main() {
 			}
 
 			gh := github.NewClient(&http.Client{Transport: ghinstallation.NewFromAppsTransport(itr, event.GetInstallation().GetID())})
-			_, res, err := gh.Checks.CreateCheckRun(r.Context(), event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), github.CreateCheckRunOptions{
-				Name:    "Checking commit message",
+			lintCheckRun, res, err := gh.Checks.CreateCheckRun(r.Context(), event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), github.CreateCheckRunOptions{
+				Name:    "Lint",
 				HeadSHA: event.GetCheckSuite().GetHeadSHA(),
 			})
 			if err != nil {
@@ -100,26 +101,105 @@ func main() {
 				break outer
 			}
 
-		case *github.CheckRunEvent:
-			if event.GetAction() == "completed" {
-				log.Println("Ignoring check_run event: completed")
-				break outer
-			}
+			go func() {
+				ctx := context.Background()
 
-			if event.GetAction() == "created" && event.GetCheckRun().GetName() == "Checking commit message" {
-				gh := github.NewClient(&http.Client{Transport: ghinstallation.NewFromAppsTransport(itr, event.GetInstallation().GetID())})
-				_, res, err := gh.Checks.UpdateCheckRun(r.Context(),
+				repositoryDirectory, err := CloneAndCheckout(event.GetRepo().GetCloneURL(), event.CheckSuite.GetHeadCommit().GetSHA())
+				defer func() {
+					log.Println("Deleting temp dir")
+					err = os.RemoveAll(repositoryDirectory)
+					if err != nil {
+						panic(err)
+					}
+				}()
+
+				modules, _, err := FindGoModules(repositoryDirectory)
+				if err != nil {
+					log.Println("[error]", err)
+					return
+				}
+
+				var issues []lint.Issue
+				for _, modulePath := range modules {
+					modulePath := filepath.Dir(modulePath)
+					report, err := lint.Lint(ctx, modulePath)
+					if err != nil {
+						log.Println("[error]", err)
+						_, res, err := gh.Checks.UpdateCheckRun(ctx,
+							event.GetRepo().GetOwner().GetLogin(),
+							event.GetRepo().GetName(),
+							lintCheckRun.GetID(),
+							github.UpdateCheckRunOptions{
+								Name:       "Lint",
+								Status:     s("completed"),
+								Conclusion: s("failure"),
+								Output: &github.CheckRunOutput{
+									Title:   github.String("Failed to run linters"),
+									Summary: github.String(fmt.Sprintf("failed to run linters: %s", err.Error())),
+								},
+							})
+						if err != nil {
+							err = toErr(res)
+							log.Println("[error]", err)
+						}
+						return
+					}
+
+					issues = append(issues, report.Issues...)
+				}
+
+				if len(issues) > 0 {
+					var annotations []*github.CheckRunAnnotation
+					for _, issue := range issues {
+						if issue.Text == "" {
+							continue
+						}
+
+						annotations = append(annotations, &github.CheckRunAnnotation{
+							AnnotationLevel: github.String("error"),
+							Title:           &issue.Text,
+							Message:         github.String(fmt.Sprintf("%s (%s)", issue.Text, issue.FromLinter)),
+							Path:            github.String(issue.Pos.Filename),
+							StartLine:       github.Int(issue.Pos.Line),
+							EndLine:         github.Int(issue.Pos.Line),
+							StartColumn:     github.Int(issue.Pos.Offset),
+							EndColumn:       github.Int(issue.Pos.Column),
+						})
+					}
+
+					_, res, err := gh.Checks.UpdateCheckRun(ctx,
+						event.GetRepo().GetOwner().GetLogin(),
+						event.GetRepo().GetName(),
+						lintCheckRun.GetID(),
+						github.UpdateCheckRunOptions{
+							Name:       "Lint",
+							Status:     s("completed"),
+							Conclusion: s("failure"),
+							Output: &github.CheckRunOutput{
+								Title:       github.String("Linter failed"),
+								Summary:     github.String("Linter failed"),
+								Annotations: annotations,
+							},
+						})
+					if err != nil {
+						err = toErr(res)
+						log.Println("[error]", err)
+					}
+					return
+				}
+
+				_, res, err := gh.Checks.UpdateCheckRun(ctx,
 					event.GetRepo().GetOwner().GetLogin(),
 					event.GetRepo().GetName(),
-					event.CheckRun.GetID(),
+					lintCheckRun.GetID(),
 					github.UpdateCheckRunOptions{
-						Name:       event.GetCheckRun().GetName(),
+						Name:       "Lint",
 						Status:     s("completed"),
 						Conclusion: s("success"),
 						Actions: []*github.CheckRunAction{
 							{
 								Label:       "Release application",
-								Description: "Build and push image",
+								Description: "Build and push",
 								Identifier:  "release_image",
 							},
 						},
@@ -127,9 +207,12 @@ func main() {
 				if err != nil {
 					err = toErr(res)
 					log.Println("[error]", err)
-					w.WriteHeader(http.StatusInternalServerError)
 				}
+			}()
 
+		case *github.CheckRunEvent:
+			if event.GetAction() == "completed" {
+				log.Println("Ignoring check_run event: completed")
 				break outer
 			}
 
@@ -237,88 +320,26 @@ func s(ss string) *string {
 }
 
 func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, dockerHubUsername, dockerHubPassword string) error {
-	local, err := os.MkdirTemp("", "temp-repository")
+	repositoryPath, err := CloneAndCheckout(remote, beforeCommitSHA)
 	if err != nil {
-		return fmt.Errorf("create temp directory: %w", err)
+		return fmt.Errorf("clone repository: %w", err)
 	}
 
 	defer func() {
-		err = os.RemoveAll(local)
+		err = os.RemoveAll(repositoryPath)
 		if err != nil {
 			panic(err)
 		}
 	}()
 
-	log.Println("Created directory", local)
-
-	r, err := git.PlainClone(local, false, &git.CloneOptions{
-		URL: remote,
-	})
+	changedFiles, err := GetChangedFiles(repositoryPath, beforeCommitSHA, afterCommitSHA)
 	if err != nil {
-		return fmt.Errorf("git clone: %w", err)
-	}
-
-	log.Println("Cloned", remote)
-
-	w, err := r.Worktree()
-	if err != nil {
-		return fmt.Errorf("worktree: %w", err)
-	}
-
-	beforeCommit, err := r.CommitObject(plumbing.NewHash(beforeCommitSHA))
-	if err != nil {
-		return fmt.Errorf("get head commit: %w", err)
-	}
-
-	log.Printf("Got HEAD: %q\n", strings.Split(beforeCommit.Message, "\n")[0])
-
-	err = w.Checkout(&git.CheckoutOptions{
-		Hash: plumbing.NewHash(afterCommitSHA),
-	})
-	if err != nil {
-		return fmt.Errorf("checkout: %w", err)
-	}
-
-	log.Println("Checked out ", afterCommitSHA)
-
-	afterCommit, err := r.CommitObject(plumbing.NewHash(afterCommitSHA))
-	if err != nil {
-		return fmt.Errorf("get merged commit: %w", err)
-	}
-
-	log.Printf("Got commit: %q\n", strings.Split(afterCommit.Message, "\n")[0])
-
-	if beforeCommit.Hash.String() == afterCommit.Hash.String() {
-		log.Println("same commit has HEAD; nothing to do")
-		return nil
-	}
-
-	patch, err := beforeCommit.Patch(afterCommit)
-	if err != nil {
-		return fmt.Errorf("get git patch: %w", err)
-	}
-
-	var changedFiles []string
-	for _, filePatch := range patch.FilePatches() {
-		from, to := filePatch.Files()
-
-		switch {
-		case to != nil:
-			abs := filepath.Join(local, to.Path())
-			changedFiles = append(changedFiles, abs)
-			log.Println("created/updated:", to.Path())
-		case from != nil:
-			abs := filepath.Join(local, from.Path())
-			changedFiles = append(changedFiles, abs)
-			log.Println("deleted:", from.Path())
-		default:
-			log.Fatalln("Both to and from are nil")
-		}
+		return fmt.Errorf("get changed files: %w", err)
 	}
 
 	// Let's find All the Go modules and runnable applications in the
 	// cloned repository.
-	modules, applications, err := FindGoModules(local)
+	modules, applications, err := FindGoModules(repositoryPath)
 	if err != nil {
 		return fmt.Errorf("find Go modules and runnable apps: %w", err)
 	}
@@ -362,7 +383,7 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 		split := strings.Split(app, separator)
 		appName := split[len(split)-2 : len(split)-1][0]
 		appName = strings.ReplaceAll(appName, "_", "-")
-		appRelativeDirectory := strings.Split(app, local)[1]
+		appRelativeDirectory := strings.Split(app, repositoryPath)[1]
 		appRelativeDirectory = strings.TrimPrefix(appRelativeDirectory, separator)
 
 		log.Println("build and push", appName, appRelativeDirectory)
@@ -370,7 +391,7 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 			DockerHubUsername:   dockerHubUsername,
 			DockerHubPassword:   dockerHubPassword,
 			DockerHubRepository: fmt.Sprintf("monocrat-%s", appName),
-			RepositoryDirectory: local,
+			RepositoryDirectory: repositoryPath,
 			AppVersion:          "1.2.3",
 			AppDirectory:        appRelativeDirectory,
 		})
@@ -380,6 +401,83 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 	}
 
 	return nil
+}
+
+func CloneAndCheckout(remote, commit string) (string, error) {
+	local, err := os.MkdirTemp("", "temp-repository")
+	if err != nil {
+		return "", fmt.Errorf("create temp directory: %w", err)
+	}
+
+	r, err := git.PlainClone(local, false, &git.CloneOptions{
+		URL: remote,
+	})
+	if err != nil {
+		return "", fmt.Errorf("git clone: %w", err)
+	}
+
+	w, err := r.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("worktree: %w", err)
+	}
+
+	err = w.Checkout(&git.CheckoutOptions{
+		Hash: plumbing.NewHash(commit),
+	})
+	if err != nil {
+		return "", fmt.Errorf("checkout: %w", err)
+	}
+
+	return local, nil
+}
+
+func GetChangedFiles(repositoryPath, beforeCommitSHA, afterCommitSHA string) ([]string, error) {
+	r, err := git.PlainOpen(repositoryPath)
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w", err)
+	}
+
+	beforeCommit, err := r.CommitObject(plumbing.NewHash(beforeCommitSHA))
+	if err != nil {
+		return nil, fmt.Errorf("get head commit: %w", err)
+	}
+
+	afterCommit, err := r.CommitObject(plumbing.NewHash(afterCommitSHA))
+	if err != nil {
+		return nil, fmt.Errorf("get merged commit: %w", err)
+	}
+
+	if beforeCommit.Hash.String() == afterCommit.Hash.String() {
+		log.Println("same commit has HEAD; nothing to do")
+		return []string{}, nil
+	}
+
+	patch, err := beforeCommit.Patch(afterCommit)
+	if err != nil {
+		return nil, fmt.Errorf("get git patch: %w", err)
+	}
+
+	var changedFiles []string
+	for _, filePatch := range patch.FilePatches() {
+		from, to := filePatch.Files()
+
+		switch {
+		case to != nil:
+			abs := filepath.Join(repositoryPath, to.Path())
+			changedFiles = append(changedFiles, abs)
+			log.Println("created/updated:", to.Path())
+
+		case from != nil:
+			abs := filepath.Join(repositoryPath, from.Path())
+			changedFiles = append(changedFiles, abs)
+			log.Println("deleted:", from.Path())
+
+		default:
+			return nil, fmt.Errorf("awkward change: %w", err)
+		}
+	}
+
+	return changedFiles, nil
 }
 
 func FindGoModules(repositoryPath string) (modules []string, applications []string, err error) {
