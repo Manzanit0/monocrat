@@ -318,29 +318,7 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 
 	// Let's find All the Go modules and runnable applications in the
 	// cloned repository.
-	var modules []string
-	var applications []string
-	err = filepath.WalkDir(local, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("checking directory entry: %w", err)
-		}
-
-		if d.Name() == ".git" || d.Name() == ".github" {
-			return filepath.SkipDir
-		}
-
-		if !d.IsDir() && d.Name() == "go.mod" {
-			modules = append(modules, path)
-			return nil
-		}
-
-		if !d.IsDir() && d.Name() == "main.go" {
-			applications = append(applications, path)
-			return nil
-		}
-
-		return nil
-	})
+	modules, applications, err := FindGoModules(local)
 	if err != nil {
 		return fmt.Errorf("find Go modules and runnable apps: %w", err)
 	}
@@ -402,4 +380,29 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 	}
 
 	return nil
+}
+
+func FindGoModules(repositoryPath string) (modules []string, applications []string, err error) {
+	err = filepath.WalkDir(repositoryPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("checking directory entry: %w", err)
+		}
+
+		if d.Name() == ".git" || d.Name() == ".github" {
+			return filepath.SkipDir
+		}
+
+		if !d.IsDir() && d.Name() == "go.mod" {
+			modules = append(modules, path)
+			return nil
+		}
+
+		if !d.IsDir() && d.Name() == "main.go" {
+			applications = append(applications, path)
+			return nil
+		}
+
+		return nil
+	})
+	return
 }
