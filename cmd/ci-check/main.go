@@ -131,8 +131,8 @@ func main() {
 							lintCheckRun.GetID(),
 							github.UpdateCheckRunOptions{
 								Name:       "Lint",
-								Status:     s("completed"),
-								Conclusion: s("failure"),
+								Status:     github.String("completed"),
+								Conclusion: github.String("failure"),
 								Output: &github.CheckRunOutput{
 									Title:   github.String("Failed to run linters"),
 									Summary: github.String(fmt.Sprintf("failed to run linters: %s", err.Error())),
@@ -173,8 +173,8 @@ func main() {
 						lintCheckRun.GetID(),
 						github.UpdateCheckRunOptions{
 							Name:       "Lint",
-							Status:     s("completed"),
-							Conclusion: s("failure"),
+							Status:     github.String("completed"),
+							Conclusion: github.String("failure"),
 							Output: &github.CheckRunOutput{
 								Title:       github.String("Linter failed"),
 								Summary:     github.String("Linter failed"),
@@ -194,8 +194,8 @@ func main() {
 					lintCheckRun.GetID(),
 					github.UpdateCheckRunOptions{
 						Name:       "Lint",
-						Status:     s("completed"),
-						Conclusion: s("success"),
+						Status:     github.String("completed"),
+						Conclusion: github.String("success"),
 						Actions: []*github.CheckRunAction{
 							{
 								Label:       "Release application",
@@ -224,7 +224,7 @@ func main() {
 					github.CreateCheckRunOptions{
 						Name:    "Release application",
 						HeadSHA: event.GetCheckRun().GetHeadSHA(),
-						Status:  s("in_progress"),
+						Status:  github.String("in_progress"),
 					})
 				if err != nil {
 					err = toErr(res)
@@ -249,8 +249,8 @@ func main() {
 							releaseCheckRun.GetID(),
 							github.UpdateCheckRunOptions{
 								Name:       "Release application",
-								Status:     s("completed"),
-								Conclusion: s("failure"),
+								Status:     github.String("completed"),
+								Conclusion: github.String("failure"),
 								Actions: []*github.CheckRunAction{
 									{
 										Label:       "Retry release",
@@ -272,8 +272,8 @@ func main() {
 						releaseCheckRun.GetID(),
 						github.UpdateCheckRunOptions{
 							Name:       "Release application",
-							Status:     s("completed"),
-							Conclusion: s("success"),
+							Status:     github.String("completed"),
+							Conclusion: github.String("success"),
 						})
 					if err != nil {
 						err = toErr(res)
@@ -313,10 +313,6 @@ func toErr(res *github.Response) error {
 	}
 
 	return fmt.Errorf("%s: %s", errResp.Message, errResp.Errors)
-}
-
-func s(ss string) *string {
-	return &ss
 }
 
 func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, dockerHubUsername, dockerHubPassword string) error {
