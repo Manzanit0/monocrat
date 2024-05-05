@@ -359,14 +359,9 @@ func BuildAndPushChangedApplications(ctx context.Context, remote, beforeCommitSH
 
 	// Now let's build images for all those nice apps and push them to Docker Hub.
 	for app := range appsToRebuild {
-		separator := fmt.Sprintf("%c", filepath.Separator)
-		split := strings.Split(app, separator)
-		appName := split[len(split)-2 : len(split)-1][0]
-		appName = strings.ReplaceAll(appName, "_", "-")
-		appRelativeDirectory := strings.Split(app, repositoryPath)[1]
-		appRelativeDirectory = strings.TrimPrefix(appRelativeDirectory, separator)
-
+		appName, appRelativeDirectory := GetAppNameAndDirectory(repositoryPath, app)
 		log.Println("build and push", appName, appRelativeDirectory)
+
 		err := image.BuildAndPush(ctx, &image.BuildAndPushOptions{
 			DockerHubUsername:   dockerHubUsername,
 			DockerHubPassword:   dockerHubPassword,
@@ -525,4 +520,20 @@ func GetAppsToRebuild(changedFiles []string, modules []string, applications []st
 	}
 
 	return appsToRebuild, modulesToVendor
+}
+
+// GetAppNameAndDirectory extracts the application's directory relative to the
+// repository and the application's name. It assumes that the application's name
+// is the directory just above the main.go file.
+//
+// Both repositoryPath and appPath are expected to be absolute paths, appPath
+// being the path to the main.go file.
+func GetAppNameAndDirectory(repositoryPath, appPath string) (string, string) {
+	separator := fmt.Sprintf("%c", filepath.Separator)
+	split := strings.Split(appPath, separator)
+	appName := split[len(split)-2 : len(split)-1][0]
+	appName = strings.ReplaceAll(appName, "_", "-")
+	appRelativeDirectory := strings.Split(appPath, repositoryPath)[1]
+	appRelativeDirectory = strings.TrimPrefix(appRelativeDirectory, separator)
+	return appName, appRelativeDirectory
 }
