@@ -346,22 +346,7 @@ func BuildAndPushChangedApplications(ctx context.Context, remote, beforeCommitSH
 	// applications that need rebuilding based on if the changed file happened
 	// in a module with runnable applications.
 	// We'd want to rebuild all the apps in a module with a change.
-	appsToRebuild := map[string]interface{}{}
-	modulesToVendor := map[string]interface{}{}
-	for _, module := range modules {
-		moduleDir := filepath.Dir(module)
-		for _, app := range applications {
-			if strings.Contains(app, moduleDir) {
-				for _, change := range changedFiles {
-					if strings.Contains(change, moduleDir) {
-						modulesToVendor[moduleDir] = nil
-						appsToRebuild[app] = nil
-						// log.Println("Needs rebuild:", app)
-					}
-				}
-			}
-		}
-	}
+	appsToRebuild, modulesToVendor := GetAppsToRebuild(changedFiles, modules, applications)
 
 	// Let's vendor the dependencies because this will just get trickier inside
 	// a container due to the private repositories.
@@ -512,4 +497,32 @@ func VendorGoModule(ctx context.Context, modulePath string) error {
 	}
 
 	return nil
+}
+
+// GetAppsToRebuild cross-checks the files changed, the available Go modules and
+// applications and computes which modules to vendor and which applications to
+// compile based on the changes.
+//
+// Modules and applications should be of the form "/foo/bar/go.mod" and
+// "/foo/bar/main.go", thus being references to the actual files, not the
+// directories.
+func GetAppsToRebuild(changedFiles []string, modules []string, applications []string) (map[string]interface{}, map[string]interface{}) {
+	appsToRebuild := map[string]interface{}{}
+	modulesToVendor := map[string]interface{}{}
+
+	for _, module := range modules {
+		moduleDir := filepath.Dir(module)
+		for _, app := range applications {
+			if strings.Contains(app, moduleDir) {
+				for _, change := range changedFiles {
+					if strings.Contains(change, moduleDir) {
+						modulesToVendor[moduleDir] = nil
+						appsToRebuild[app] = nil
+					}
+				}
+			}
+		}
+	}
+
+	return appsToRebuild, modulesToVendor
 }
