@@ -364,12 +364,10 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 
 	// Let's vendor the dependencies because this will just get trickier inside
 	// a container due to the private repositories.
-	for module := range modulesToVendor {
-		cmd := exec.CommandContext(context.TODO(), "go", "mod", "vendor")
-		cmd.Dir = module
-		output, err := cmd.CombinedOutput()
+	for modulePath := range modulesToVendor {
+		err = VendorGoModule(context.TODO(), modulePath)
 		if err != nil {
-			return fmt.Errorf("%s, %s", err.Error(), string(output))
+			return fmt.Errorf("vendor module %s: %w", modulePath, err)
 		}
 	}
 
@@ -499,4 +497,18 @@ func FindGoModules(repositoryPath string) (modules []string, applications []stri
 		return nil
 	})
 	return
+}
+
+// VendorGoModule mod vendor for the module.
+// modulePath should be of form "/foo/bar/baz", it being a directory, not the
+// reference to the go.mod file.
+func VendorGoModule(ctx context.Context, modulePath string) error {
+	cmd := exec.CommandContext(ctx, "go", "mod", "vendor")
+	cmd.Dir = modulePath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s, %s", err.Error(), string(output))
+	}
+
+	return nil
 }
