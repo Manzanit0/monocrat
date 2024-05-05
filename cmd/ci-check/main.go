@@ -235,6 +235,7 @@ func main() {
 
 				go func() {
 					err = BuildAndPushChangedApplications(
+						context.Background(),
 						event.GetRepo().GetCloneURL(),
 						event.GetCheckRun().GetCheckSuite().GetBeforeSHA(),
 						event.GetCheckRun().GetCheckSuite().GetAfterSHA(),
@@ -315,7 +316,7 @@ func toErr(res *github.Response) error {
 	return fmt.Errorf("%s: %s", errResp.Message, errResp.Errors)
 }
 
-func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, dockerHubUsername, dockerHubPassword string) error {
+func BuildAndPushChangedApplications(ctx context.Context, remote, beforeCommitSHA, afterCommitSHA, dockerHubUsername, dockerHubPassword string) error {
 	repositoryPath, err := CloneAndCheckout(remote, beforeCommitSHA)
 	if err != nil {
 		return fmt.Errorf("clone repository: %w", err)
@@ -365,7 +366,7 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 	// Let's vendor the dependencies because this will just get trickier inside
 	// a container due to the private repositories.
 	for modulePath := range modulesToVendor {
-		err = VendorGoModule(context.TODO(), modulePath)
+		err = VendorGoModule(ctx, modulePath)
 		if err != nil {
 			return fmt.Errorf("vendor module %s: %w", modulePath, err)
 		}
@@ -381,7 +382,7 @@ func BuildAndPushChangedApplications(remote, beforeCommitSHA, afterCommitSHA, do
 		appRelativeDirectory = strings.TrimPrefix(appRelativeDirectory, separator)
 
 		log.Println("build and push", appName, appRelativeDirectory)
-		err := image.BuildAndPush(context.TODO(), &image.BuildAndPushOptions{
+		err := image.BuildAndPush(ctx, &image.BuildAndPushOptions{
 			DockerHubUsername:   dockerHubUsername,
 			DockerHubPassword:   dockerHubPassword,
 			DockerHubRepository: fmt.Sprintf("monocrat-%s", appName),
