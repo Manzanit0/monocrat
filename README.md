@@ -1,24 +1,10 @@
 # Monocrat
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/hKdYBw?referralCode=ePg2dP)
+Monocrat is a collection of GitHub application prototypes for different purposes. Currently there are two available:
 
-Monocrat is a GitHub App for [custom protection
-rules](https://docs.github.com/en/actions/deployment/protecting-deployments/creating-custom-deployment-protection-rules).
-
-> **Note**
->
-> Since `google/github-go` currently doesn't support the newest custom
-> deployment rule endpoints, I had to fork it and add what I needed there. Might
-> be worth checking back there at some point to see if it's there and ditch the
-> fork.
-
-## Alternative ways of interacting with deploys
-
-`gh` CLI extension: `https://github.com/yuri-1987/gh-deploy`
-
-```sh
-gh deploy --env production --run-id 4881224728 --repo "Manzanit0/gitops-env-per-folder-poc" --reject
-```
+- ci-check: Showcases how to use the Checks API to run linters and build docker images.
+- deployment-protection-rule: Showcases how to extend the GitHub Deployments feature with [custom protection
+  rules](https://docs.github.com/en/actions/deployment/protecting-deployments/creating-custom-deployment-protection-rules)
 
 ## Resources
 
@@ -27,3 +13,11 @@ gh deploy --env production --run-id 4881224728 --repo "Manzanit0/gitops-env-per-
 - https://docs.github.com/en/webhooks-and-events/webhooks/webhook-events-and-payloads#deployment_protection_rule
 - https://docs.github.com/en/rest/actions/workflow-runs#review-custom-deployment-protection-rules-for-a-workflow-run
 - https://github.com/google/go-github/issues/2774
+
+## Hacking
+
+To build the image of a service:
+
+```sh
+docker build -t monocrat:latest --build-arg SERVICE_PATH=./cmd/deployment-protection-rule .
+```
