@@ -1,22 +1,10 @@
 # Monocrat
 
-Monocrat is a GitHub App for [custom protection
-rules](https://docs.github.com/en/actions/deployment/protecting-deployments/creating-custom-deployment-protection-rules).
+Monocrat is a collection of GitHub application prototypes for different purposes. Currently there are two available:
 
-> **Note**
->
-> Since `google/github-go` currently doesn't support the newest custom
-> deployment rule endpoints, I had to fork it and add what I needed there. Might
-> be worth checking back there at some point to see if it's there and ditch the
-> fork.
-
-## Alternative ways of interacting with deploys
-
-`gh` CLI extension: `https://github.com/yuri-1987/gh-deploy`
-
-```sh
-gh deploy --env production --run-id 4881224728 --repo "Manzanit0/gitops-env-per-folder-poc" --reject
-```
+- ci-check: Showcases how to use the Checks API to run linters and build docker images.
+- deployment-protection-rule: Showcases how to extend the GitHub Deployments feature with [custom protection
+  rules](https://docs.github.com/en/actions/deployment/protecting-deployments/creating-custom-deployment-protection-rules)
 
 ## Resources
 
