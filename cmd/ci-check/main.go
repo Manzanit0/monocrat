@@ -84,205 +84,20 @@ func main() {
 	outer:
 		switch event := event.(type) {
 		case *github.CheckSuiteEvent:
-			if event.GetAction() == "completed" {
-				log.Println("Ignoring check_suite event: completed")
+			if event.GetAction() == "created" {
+				go LintApplication(context.Background(), itr, event)
 				break outer
 			}
 
-			gh := github.NewClient(&http.Client{Transport: ghinstallation.NewFromAppsTransport(itr, event.GetInstallation().GetID())})
-			lintCheckRun, res, err := gh.Checks.CreateCheckRun(r.Context(), event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), github.CreateCheckRunOptions{
-				Name:    "Lint",
-				HeadSHA: event.GetCheckSuite().GetHeadSHA(),
-			})
-			if err != nil {
-				err = toErr(res)
-				log.Println("[error]", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				break outer
-			}
-
-			go func() {
-				ctx := context.Background()
-
-				repositoryDirectory, err := CloneAndCheckout(event.GetRepo().GetCloneURL(), event.CheckSuite.GetHeadCommit().GetSHA())
-				defer func() {
-					log.Println("Deleting temp dir")
-					err = os.RemoveAll(repositoryDirectory)
-					if err != nil {
-						panic(err)
-					}
-				}()
-
-				modules, _, err := FindGoModules(repositoryDirectory)
-				if err != nil {
-					log.Println("[error]", err)
-					return
-				}
-
-				var issues []lint.Issue
-				for _, modulePath := range modules {
-					modulePath := filepath.Dir(modulePath)
-					report, err := lint.Lint(ctx, modulePath)
-					if err != nil {
-						log.Println("[error]", err)
-						_, res, err := gh.Checks.UpdateCheckRun(ctx,
-							event.GetRepo().GetOwner().GetLogin(),
-							event.GetRepo().GetName(),
-							lintCheckRun.GetID(),
-							github.UpdateCheckRunOptions{
-								Name:       "Lint",
-								Status:     github.String("completed"),
-								Conclusion: github.String("failure"),
-								Output: &github.CheckRunOutput{
-									Title:   github.String("Failed to run linters"),
-									Summary: github.String(fmt.Sprintf("failed to run linters: %s", err.Error())),
-								},
-							})
-						if err != nil {
-							err = toErr(res)
-							log.Println("[error]", err)
-						}
-						return
-					}
-
-					issues = append(issues, report.Issues...)
-				}
-
-				if len(issues) > 0 {
-					var annotations []*github.CheckRunAnnotation
-					for _, issue := range issues {
-						if issue.Text == "" {
-							continue
-						}
-
-						annotations = append(annotations, &github.CheckRunAnnotation{
-							AnnotationLevel: github.String("error"),
-							Title:           &issue.Text,
-							Message:         github.String(fmt.Sprintf("%s (%s)", issue.Text, issue.FromLinter)),
-							Path:            github.String(issue.Pos.Filename),
-							StartLine:       github.Int(issue.Pos.Line),
-							EndLine:         github.Int(issue.Pos.Line),
-							StartColumn:     github.Int(issue.Pos.Offset),
-							EndColumn:       github.Int(issue.Pos.Column),
-						})
-					}
-
-					_, res, err := gh.Checks.UpdateCheckRun(ctx,
-						event.GetRepo().GetOwner().GetLogin(),
-						event.GetRepo().GetName(),
-						lintCheckRun.GetID(),
-						github.UpdateCheckRunOptions{
-							Name:       "Lint",
-							Status:     github.String("completed"),
-							Conclusion: github.String("failure"),
-							Output: &github.CheckRunOutput{
-								Title:       github.String("Linter failed"),
-								Summary:     github.String("Linter failed"),
-								Annotations: annotations,
-							},
-						})
-					if err != nil {
-						err = toErr(res)
-						log.Println("[error]", err)
-					}
-					return
-				}
-
-				_, res, err := gh.Checks.UpdateCheckRun(ctx,
-					event.GetRepo().GetOwner().GetLogin(),
-					event.GetRepo().GetName(),
-					lintCheckRun.GetID(),
-					github.UpdateCheckRunOptions{
-						Name:       "Lint",
-						Status:     github.String("completed"),
-						Conclusion: github.String("success"),
-						Actions: []*github.CheckRunAction{
-							{
-								Label:       "Release application",
-								Description: "Build and push",
-								Identifier:  "release_image",
-							},
-						},
-					})
-				if err != nil {
-					err = toErr(res)
-					log.Println("[error]", err)
-				}
-			}()
+			log.Println("Ignoring check_suite event:", event.GetAction())
 
 		case *github.CheckRunEvent:
-			if event.GetAction() == "completed" {
-				log.Println("Ignoring check_run event: completed")
-				break outer
-			}
-
 			if event.GetAction() == "requested_action" {
-				gh := github.NewClient(&http.Client{Transport: ghinstallation.NewFromAppsTransport(itr, event.GetInstallation().GetID())})
-				releaseCheckRun, res, err := gh.Checks.CreateCheckRun(r.Context(),
-					event.GetRepo().GetOwner().GetLogin(),
-					event.GetRepo().GetName(),
-					github.CreateCheckRunOptions{
-						Name:    "Release application",
-						HeadSHA: event.GetCheckRun().GetHeadSHA(),
-						Status:  github.String("in_progress"),
-					})
-				if err != nil {
-					err = toErr(res)
-					log.Println("[error]", err)
-					w.WriteHeader(http.StatusInternalServerError)
-					break outer
-				}
-
-				go func() {
-					err = BuildAndPushChangedApplications(
-						context.Background(),
-						event.GetRepo().GetCloneURL(),
-						event.GetCheckRun().GetCheckSuite().GetBeforeSHA(),
-						event.GetCheckRun().GetCheckSuite().GetAfterSHA(),
-						dockerHubUsername,
-						dockerHubPassword,
-					)
-					if err != nil {
-						log.Println("[error]", err)
-						_, res, err := gh.Checks.UpdateCheckRun(context.Background(),
-							event.GetRepo().GetOwner().GetLogin(),
-							event.GetRepo().GetName(),
-							releaseCheckRun.GetID(),
-							github.UpdateCheckRunOptions{
-								Name:       "Release application",
-								Status:     github.String("completed"),
-								Conclusion: github.String("failure"),
-								Actions: []*github.CheckRunAction{
-									{
-										Label:       "Retry release",
-										Description: "Retry build and push",
-										Identifier:  "release_image_retry",
-									},
-								},
-							})
-						if err != nil {
-							err = toErr(res)
-							log.Println("[error]", err)
-							return
-						}
-					}
-
-					_, res, err := gh.Checks.UpdateCheckRun(context.Background(),
-						event.GetRepo().GetOwner().GetLogin(),
-						event.GetRepo().GetName(),
-						releaseCheckRun.GetID(),
-						github.UpdateCheckRunOptions{
-							Name:       "Release application",
-							Status:     github.String("completed"),
-							Conclusion: github.String("success"),
-						})
-					if err != nil {
-						err = toErr(res)
-						log.Println("[error]", err)
-					}
-				}()
+				go ReleaseApplication(context.Background(), itr, event, dockerHubUsername, dockerHubPassword)
 				break outer
 			}
+
+			log.Println("Ignoring check_run event:", event.GetAction())
 
 		default:
 			log.Println("Ignoring event: not a check_run or check_suite")
@@ -303,6 +118,187 @@ func main() {
 	log.Println("[info] starting server on port", port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
 		log.Println("[error] ListenAndServe", err)
+	}
+}
+
+func LintApplication(ctx context.Context, itr *ghinstallation.AppsTransport, event *github.CheckSuiteEvent) {
+	gh := github.NewClient(&http.Client{Transport: ghinstallation.NewFromAppsTransport(itr, event.GetInstallation().GetID())})
+	lintCheckRun, res, err := gh.Checks.CreateCheckRun(ctx, event.GetRepo().GetOwner().GetLogin(), event.GetRepo().GetName(), github.CreateCheckRunOptions{
+		Name:    "Lint",
+		HeadSHA: event.GetCheckSuite().GetHeadSHA(),
+	})
+	if err != nil {
+		err = toErr(res)
+		log.Println("[error]", err)
+		return
+	}
+
+	repositoryDirectory, err := CloneAndCheckout(event.GetRepo().GetCloneURL(), event.CheckSuite.GetHeadCommit().GetSHA())
+	defer func() {
+		log.Println("Deleting temp dir")
+		err = os.RemoveAll(repositoryDirectory)
+		if err != nil {
+			panic(err)
+		}
+	}()
+
+	modules, _, err := FindGoModules(repositoryDirectory)
+	if err != nil {
+		log.Println("[error]", err)
+		return
+	}
+
+	var issues []lint.Issue
+	for _, modulePath := range modules {
+		modulePath := filepath.Dir(modulePath)
+		report, err := lint.Lint(ctx, modulePath)
+		if err != nil {
+			log.Println("[error]", err)
+			_, res, err := gh.Checks.UpdateCheckRun(ctx,
+				event.GetRepo().GetOwner().GetLogin(),
+				event.GetRepo().GetName(),
+				lintCheckRun.GetID(),
+				github.UpdateCheckRunOptions{
+					Name:       "Lint",
+					Status:     github.String("completed"),
+					Conclusion: github.String("failure"),
+					Output: &github.CheckRunOutput{
+						Title:   github.String("Failed to run linters"),
+						Summary: github.String(fmt.Sprintf("failed to run linters: %s", err.Error())),
+					},
+				})
+			if err != nil {
+				err = toErr(res)
+				log.Println("[error]", err)
+			}
+			return
+		}
+
+		issues = append(issues, report.Issues...)
+	}
+
+	if len(issues) > 0 {
+		var annotations []*github.CheckRunAnnotation
+		for _, issue := range issues {
+			if issue.Text == "" {
+				continue
+			}
+
+			annotations = append(annotations, &github.CheckRunAnnotation{
+				AnnotationLevel: github.String("error"),
+				Title:           &issue.Text,
+				Message:         github.String(fmt.Sprintf("%s (%s)", issue.Text, issue.FromLinter)),
+				Path:            github.String(issue.Pos.Filename),
+				StartLine:       github.Int(issue.Pos.Line),
+				EndLine:         github.Int(issue.Pos.Line),
+				StartColumn:     github.Int(issue.Pos.Offset),
+				EndColumn:       github.Int(issue.Pos.Column),
+			})
+		}
+
+		_, res, err := gh.Checks.UpdateCheckRun(ctx,
+			event.GetRepo().GetOwner().GetLogin(),
+			event.GetRepo().GetName(),
+			lintCheckRun.GetID(),
+			github.UpdateCheckRunOptions{
+				Name:       "Lint",
+				Status:     github.String("completed"),
+				Conclusion: github.String("failure"),
+				Output: &github.CheckRunOutput{
+					Title:       github.String("Linter failed"),
+					Summary:     github.String("Linter failed"),
+					Annotations: annotations,
+				},
+			})
+		if err != nil {
+			err = toErr(res)
+			log.Println("[error]", err)
+		}
+		return
+	}
+
+	_, res, err = gh.Checks.UpdateCheckRun(ctx,
+		event.GetRepo().GetOwner().GetLogin(),
+		event.GetRepo().GetName(),
+		lintCheckRun.GetID(),
+		github.UpdateCheckRunOptions{
+			Name:       "Lint",
+			Status:     github.String("completed"),
+			Conclusion: github.String("success"),
+			Actions: []*github.CheckRunAction{
+				{
+					Label:       "Release application",
+					Description: "Build and push",
+					Identifier:  "release_image",
+				},
+			},
+		})
+	if err != nil {
+		err = toErr(res)
+		log.Println("[error]", err)
+	}
+}
+
+func ReleaseApplication(ctx context.Context, itr *ghinstallation.AppsTransport, event *github.CheckRunEvent, dockerHubUsername, dockerHubPassword string) {
+	gh := github.NewClient(&http.Client{Transport: ghinstallation.NewFromAppsTransport(itr, event.GetInstallation().GetID())})
+	releaseCheckRun, res, err := gh.Checks.CreateCheckRun(ctx,
+		event.GetRepo().GetOwner().GetLogin(),
+		event.GetRepo().GetName(),
+		github.CreateCheckRunOptions{
+			Name:    "Release application",
+			HeadSHA: event.GetCheckRun().GetHeadSHA(),
+			Status:  github.String("in_progress"),
+		})
+	if err != nil {
+		err = toErr(res)
+		log.Println("[error]", err)
+		return
+	}
+	err = BuildAndPushChangedApplications(
+		ctx,
+		event.GetRepo().GetCloneURL(),
+		event.GetCheckRun().GetCheckSuite().GetBeforeSHA(),
+		event.GetCheckRun().GetCheckSuite().GetAfterSHA(),
+		dockerHubUsername,
+		dockerHubPassword,
+	)
+	if err != nil {
+		log.Println("[error]", err)
+		_, res, err := gh.Checks.UpdateCheckRun(context.Background(),
+			event.GetRepo().GetOwner().GetLogin(),
+			event.GetRepo().GetName(),
+			releaseCheckRun.GetID(),
+			github.UpdateCheckRunOptions{
+				Name:       "Release application",
+				Status:     github.String("completed"),
+				Conclusion: github.String("failure"),
+				Actions: []*github.CheckRunAction{
+					{
+						Label:       "Retry release",
+						Description: "Retry build and push",
+						Identifier:  "release_image_retry",
+					},
+				},
+			})
+		if err != nil {
+			err = toErr(res)
+			log.Println("[error]", err)
+			return
+		}
+	}
+
+	_, res, err = gh.Checks.UpdateCheckRun(ctx,
+		event.GetRepo().GetOwner().GetLogin(),
+		event.GetRepo().GetName(),
+		releaseCheckRun.GetID(),
+		github.UpdateCheckRunOptions{
+			Name:       "Release application",
+			Status:     github.String("completed"),
+			Conclusion: github.String("success"),
+		})
+	if err != nil {
+		err = toErr(res)
+		log.Println("[error]", err)
 	}
 }
 
